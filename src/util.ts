@@ -1,6 +1,6 @@
 import { trace } from "@opentelemetry/api"
 import { MAX_PENDING } from "./types.ts"
-import type { HandlerContext, SessionAgentType } from "./types.ts"
+import type { HandlerContext, SessionAgentType, SessionState } from "./types.ts"
 
 const GEN_AI_PROVIDER_NAMES: Readonly<Record<string, string>> = {
   "amazon-bedrock": "aws.bedrock",
@@ -117,6 +117,23 @@ export function getSessionAgentMeta(
     agentName: totals?.agent ?? "unknown",
     agentType: totals?.agentType ?? "unknown",
   }
+}
+
+export function setSessionState(sessionID: string, state: SessionState, ctx: HandlerContext, isSubagent?: boolean) {
+  const previous = ctx.sessionStates.get(sessionID)
+  const { agentName, agentType } = getSessionAgentMeta(sessionID, ctx)
+  setBoundedMap(ctx.sessionStates, sessionID, {
+    state,
+    agent: agentName !== "unknown" ? agentName : previous?.agent ?? "unknown",
+    agentType: agentType !== "unknown" ? agentType : previous?.agentType ?? "unknown",
+    isSubagent: isSubagent ?? previous?.isSubagent ?? false,
+    model: previous?.model ?? "unknown",
+  })
+}
+
+export function setSessionModel(sessionID: string, model: string, ctx: HandlerContext) {
+  const previous = ctx.sessionStates.get(sessionID)
+  if (previous) setBoundedMap(ctx.sessionStates, sessionID, { ...previous, model })
 }
 
 /** Builds a consistent agent attribute set for OTLP logs, metrics, and spans. */

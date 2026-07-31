@@ -35,6 +35,11 @@ function makeSessionStatus(sessionID: string, status: { type: "retry"; attempt: 
 }
 
 describe("handleSessionCreated", () => {
+  test("tracks the session state", async () => {
+    const { ctx } = makeCtx()
+    await handleSessionCreated(makeSessionCreated("ses_1"), ctx)
+    expect(ctx.sessionStates.get("ses_1")).toMatchObject({ state: "created", isSubagent: false })
+  })
   test("increments session counter", async () => {
     const { ctx, counters } = makeCtx()
     await handleSessionCreated(makeSessionCreated("ses_1"), ctx)

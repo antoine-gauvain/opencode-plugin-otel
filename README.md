@@ -36,6 +36,7 @@ An [opencode](https://opencode.ai) plugin that exports telemetry via OpenTelemet
 | Metric | Type | Description |
 |--------|------|-------------|
 | `opencode.session.count` | Counter | Incremented on each `session.created` event |
+| `opencode.session.state` | Observable gauge | One point per retained session, labeled by project, session ID, state, agent, agent type, subagent flag, and model |
 | `opencode.token.usage` | Counter | Per token type: `input`, `output`, `reasoning`, `cacheRead`, `cacheCreation` |
 | `opencode.cost.usage` | Counter | USD cost per completed assistant message |
 | `opencode.lines_of_code.count` | Counter | **Gross positive churn, not a net total.** Emits the positive delta of `additions`/`deletions` since the previous `session.diff` for the same session; negative deltas (when opencode's cumulative `additions` or `deletions` shrinks vs. the last event) are dropped. Summing the counter therefore reports gross lines added/removed across forward transitions — it does *not* reconcile back to the session's current state after any revert (full or partial). Intra-message rewrites that opencode collapses in its per-message cumulative are not visible here at all. Use `opencode.lines_of_code.total` for the authoritative live cumulative. |

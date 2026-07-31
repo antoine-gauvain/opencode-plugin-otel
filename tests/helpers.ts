@@ -1,6 +1,18 @@
 import type { HandlerContext, Instruments } from "../src/types.ts"
 import type { LogRecord } from "@opentelemetry/api-logs"
-import type { Counter, Gauge, Histogram, Span, SpanOptions, Tracer, Context, SpanContext, SpanStatus, Attributes } from "@opentelemetry/api"
+import type {
+  Counter,
+  Gauge,
+  Histogram,
+  ObservableGauge,
+  Span,
+  SpanOptions,
+  Tracer,
+  Context,
+  SpanContext,
+  SpanStatus,
+  Attributes,
+} from "@opentelemetry/api"
 import { ROOT_CONTEXT, SpanStatusCode, trace } from "@opentelemetry/api"
 
 export type SpyCounter = {
@@ -54,29 +66,51 @@ export type SpyTracer = {
 }
 
 function makeCounter(): SpyCounter {
-  const spy: SpyCounter = { calls: [], add(v, a = {}) { spy.calls.push({ value: v, attrs: a }) } }
+  const spy: SpyCounter = {
+    calls: [],
+    add(v, a = {}) {
+      spy.calls.push({ value: v, attrs: a })
+    },
+  }
   return spy
 }
 
 function makeHistogram(): SpyHistogram {
-  const spy: SpyHistogram = { calls: [], record(v, a = {}) { spy.calls.push({ value: v, attrs: a }) } }
+  const spy: SpyHistogram = {
+    calls: [],
+    record(v, a = {}) {
+      spy.calls.push({ value: v, attrs: a })
+    },
+  }
   return spy
 }
 
 function makeGauge(): SpyGauge {
-  const spy: SpyGauge = { calls: [], record(v, a = {}) { spy.calls.push({ value: v, attrs: a }) } }
+  const spy: SpyGauge = {
+    calls: [],
+    record(v, a = {}) {
+      spy.calls.push({ value: v, attrs: a })
+    },
+  }
   return spy
 }
 
 function makeLogger(): SpyLogger {
-  const spy: SpyLogger = { records: [], emit(r) { spy.records.push(r) } }
+  const spy: SpyLogger = {
+    records: [],
+    emit(r) {
+      spy.records.push(r)
+    },
+  }
   return spy
 }
 
 function makePluginLog(): SpyPluginLog {
   const spy: SpyPluginLog = {
     calls: [],
-    fn: async (level, message, extra) => { spy.calls.push({ level, message, extra }) },
+    fn: async (level, message, extra) => {
+      spy.calls.push({ level, message, extra })
+    },
   }
   return spy
 }
@@ -102,15 +136,38 @@ function makeSpan(
     attributes: {},
     parentSpan,
     parentSpanContext,
-    setStatus(s) { span.status = s; return span },
-    setAttribute(k, v) { span.attributes[k] = v; return span },
-    setAttributes(attrs) { Object.assign(span.attributes, attrs); return span },
-    end(t) { span.ended = true; span.endTime = t },
-    isRecording() { return !span.ended },
-    spanContext() { return context },
-    addEvent() { return span },
-    recordException() { return span },
-    updateName(n) { span.name = n; return span },
+    setStatus(s) {
+      span.status = s
+      return span
+    },
+    setAttribute(k, v) {
+      span.attributes[k] = v
+      return span
+    },
+    setAttributes(attrs) {
+      Object.assign(span.attributes, attrs)
+      return span
+    },
+    end(t) {
+      span.ended = true
+      span.endTime = t
+    },
+    isRecording() {
+      return !span.ended
+    },
+    spanContext() {
+      return context
+    },
+    addEvent() {
+      return span
+    },
+    recordException() {
+      return span
+    },
+    updateName(n) {
+      span.name = n
+      return span
+    },
   }
   return span
 }
@@ -120,8 +177,8 @@ export function makeTracer(): SpyTracer {
   const tracer: SpyTracer = {
     spans: [],
     startSpan(name, options, ctx) {
-      const parentFromCtx = ctx ? trace.getSpan(ctx) as SpySpan | undefined : undefined
-      const parentSpanContext = ctx ? trace.getSpanContext(ctx) ?? undefined : undefined
+      const parentFromCtx = ctx ? (trace.getSpan(ctx) as SpySpan | undefined) : undefined
+      const parentSpanContext = ctx ? (trace.getSpanContext(ctx) ?? undefined) : undefined
       const ownSpanContext: SpanContext = {
         traceId: parentSpanContext?.traceId ?? "00000000000000000000000000000001",
         spanId: (nextSpanID++).toString(16).padStart(16, "0"),
@@ -213,6 +270,7 @@ export function makeCtx(
     modelUsageCounter: modelUsage as unknown as Counter,
     retryCounter: retry as unknown as Counter,
     subtaskCounter: subtask as unknown as Counter,
+    sessionStateGauge: { addCallback() {} } as unknown as ObservableGauge,
   }
 
   const ctx: HandlerContext = {
@@ -226,6 +284,7 @@ export function makeCtx(
     pendingToolSpans: new Map(),
     pendingPermissions: new Map(),
     sessionTotals: new Map(),
+    sessionStates: new Map(),
     sessionDiffTotals: new Map(),
     disabledMetrics: new Set(disabledMetrics),
     disabledTraces: new Set(disabledTraces),
@@ -250,7 +309,11 @@ export function makeCtx(
     ctx,
     counters: { session, token, cost, lines, commit, cache, message, modelUsage, retry, subtask },
     histograms: { tool: toolHistogram, sessionDuration: sessionDurationHistogram },
-    gauges: { sessionToken: sessionTokenGauge, sessionCost: sessionCostGauge, linesTotal: linesTotalGauge },
+    gauges: {
+      sessionToken: sessionTokenGauge,
+      sessionCost: sessionCostGauge,
+      linesTotal: linesTotalGauge,
+    },
     logger,
     pluginLog,
     tracer,
