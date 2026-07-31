@@ -86,24 +86,30 @@ export async function setupOtel(
     try {
       await dynamicHeaders.refresh()
     } catch (error) {
-      console.warn("[opencode-plugin-otel] Failed to prewarm OTLP headers helper. Falling back to refresh-on-auth-failure.", error)
+      console.warn(
+        "[opencode-plugin-otel] Failed to prewarm OTLP headers helper. Falling back to refresh-on-auth-failure.",
+        error,
+      )
     }
   }
-  const makeMetricExporter = (headers: HeadersMap) => protocol === "http/protobuf"
-    ? new OTLPProtoMetricExporter({ url: buildHttpSignalUrl(endpoint, "metrics"), headers })
-    : protocol === "http/json"
-      ? new OTLPHttpMetricExporter({ url: buildHttpSignalUrl(endpoint, "metrics"), headers })
-      : new OTLPMetricExporter({ url: endpoint, metadata: createGrpcMetadata(headers) })
-  const makeLogExporter = (headers: HeadersMap) => protocol === "http/protobuf"
-    ? new OTLPProtoLogExporter({ url: buildHttpSignalUrl(endpoint, "logs"), headers })
-    : protocol === "http/json"
-      ? new OTLPHttpLogExporter({ url: buildHttpSignalUrl(endpoint, "logs"), headers })
-      : new OTLPLogExporter({ url: endpoint, metadata: createGrpcMetadata(headers) })
-  const makeTraceExporter = (headers: HeadersMap) => protocol === "http/protobuf"
-    ? new OTLPProtoTraceExporter({ url: buildHttpSignalUrl(endpoint, "traces"), headers })
-    : protocol === "http/json"
-      ? new OTLPHttpTraceExporter({ url: buildHttpSignalUrl(endpoint, "traces"), headers })
-      : new OTLPTraceExporter({ url: endpoint, metadata: createGrpcMetadata(headers) })
+  const makeMetricExporter = (headers: HeadersMap) =>
+    protocol === "http/protobuf"
+      ? new OTLPProtoMetricExporter({ url: buildHttpSignalUrl(endpoint, "metrics"), headers })
+      : protocol === "http/json"
+        ? new OTLPHttpMetricExporter({ url: buildHttpSignalUrl(endpoint, "metrics"), headers })
+        : new OTLPMetricExporter({ url: endpoint, metadata: createGrpcMetadata(headers) })
+  const makeLogExporter = (headers: HeadersMap) =>
+    protocol === "http/protobuf"
+      ? new OTLPProtoLogExporter({ url: buildHttpSignalUrl(endpoint, "logs"), headers })
+      : protocol === "http/json"
+        ? new OTLPHttpLogExporter({ url: buildHttpSignalUrl(endpoint, "logs"), headers })
+        : new OTLPLogExporter({ url: endpoint, metadata: createGrpcMetadata(headers) })
+  const makeTraceExporter = (headers: HeadersMap) =>
+    protocol === "http/protobuf"
+      ? new OTLPProtoTraceExporter({ url: buildHttpSignalUrl(endpoint, "traces"), headers })
+      : protocol === "http/json"
+        ? new OTLPHttpTraceExporter({ url: buildHttpSignalUrl(endpoint, "traces"), headers })
+        : new OTLPTraceExporter({ url: endpoint, metadata: createGrpcMetadata(headers) })
   const metricExporter = otlpHeadersHelper
     ? new RefreshingMetricExporter(makeMetricExporter, dynamicHeaders)
     : makeMetricExporter(staticHeaders)
@@ -162,11 +168,13 @@ export function createInstruments(prefix: string): Instruments {
     }),
     linesCounter: meter.createCounter(`${prefix}lines_of_code.count`, {
       unit: "{line}",
-      description: "Gross positive churn of lines added/removed across a session. Emits the positive delta vs. the previous session.diff; negative deltas (cumulative shrinkage) are dropped, so sums do not reconcile to net after any revert. Use lines_of_code.total for the authoritative live cumulative.",
+      description:
+        "Gross positive churn of lines added/removed across a session. Emits the positive delta vs. the previous session.diff; negative deltas (cumulative shrinkage) are dropped, so sums do not reconcile to net after any revert. Use lines_of_code.total for the authoritative live cumulative.",
     }),
     linesTotalGauge: meter.createGauge(`${prefix}lines_of_code.total`, {
       unit: "{line}",
-      description: "Authoritative live cumulative lines added/removed for the current session. Mirrors opencode's session.diff cumulative value on every event; tracks partial and full reverts faithfully.",
+      description:
+        "Authoritative live cumulative lines added/removed for the current session. Mirrors opencode's session.diff cumulative value on every event; tracks partial and full reverts faithfully.",
     }),
     commitCounter: meter.createCounter(`${prefix}commit.count`, {
       unit: "{commit}",
@@ -196,7 +204,7 @@ export function createInstruments(prefix: string): Instruments {
       unit: "USD",
       description: "Total cost per session in USD, recorded as a histogram on session idle",
       advice: {
-        explicitBucketBoundaries: [0.01, 0.05, 0.10, 0.25, 0.50, 1.00, 2.50, 5.00, 10.00, 25.00],
+        explicitBucketBoundaries: [0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0],
       },
     }),
     modelUsageCounter: meter.createCounter(`${prefix}model.usage`, {
@@ -210,6 +218,10 @@ export function createInstruments(prefix: string): Instruments {
     subtaskCounter: meter.createCounter(`${prefix}subtask.count`, {
       unit: "{subtask}",
       description: "Number of sub-agent invocations observed via subtask message parts",
+    }),
+    sessionStateGauge: meter.createObservableGauge(`${prefix}session.state`, {
+      unit: "{session}",
+      description: "One point per session with its current state",
     }),
   }
 }

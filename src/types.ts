@@ -1,4 +1,13 @@
-import type { Context, Counter, Gauge, Histogram, Span, SpanContext, Tracer } from "@opentelemetry/api"
+import type {
+  Context,
+  Counter,
+  Gauge,
+  Histogram,
+  ObservableGauge,
+  Span,
+  SpanContext,
+  Tracer,
+} from "@opentelemetry/api"
 import type { LogRecord } from "@opentelemetry/api-logs"
 
 /** Numeric priority map for log levels; higher value = higher severity. */
@@ -52,10 +61,19 @@ export type Instruments = {
   modelUsageCounter: Counter
   retryCounter: Counter
   subtaskCounter: Counter
+  sessionStateGauge: ObservableGauge
 }
 
 /** Session role emitted by opencode: either the primary/root agent or a spawned subagent. */
 export type SessionAgentType = "primary" | "subagent"
+export type SessionState = "created" | "busy" | "idle" | "retry" | "permission" | "error"
+export type SessionStateEntry = {
+  state: SessionState
+  agent: string
+  agentType: SessionAgentType | "unknown"
+  isSubagent: boolean
+  model: string
+}
 
 /** Accumulated per-session totals used for gauge snapshots on session.idle. */
 export type SessionTotals = {
@@ -93,6 +111,7 @@ export type HandlerContext = {
   pendingToolSpans: Map<string, PendingToolSpan>
   pendingPermissions: Map<string, PendingPermission>
   sessionTotals: Map<string, SessionTotals>
+  sessionStates: Map<string, SessionStateEntry>
   sessionDiffTotals: Map<string, { additions: number; deletions: number }>
   disabledMetrics: Set<string>
   disabledTraces: Set<string>

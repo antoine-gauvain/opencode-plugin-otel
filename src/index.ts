@@ -17,16 +17,38 @@ import type {
   EventCommandExecuted,
 } from "@opencode-ai/sdk"
 import { LEVELS, type Level, type HandlerContext } from "./types.ts"
-import { loadConfig, parseAttributePairs, resolveHelperPath, resolveLogLevel, type OtelPluginOptions } from "./config.ts"
+import {
+  loadConfig,
+  parseAttributePairs,
+  resolveHelperPath,
+  resolveLogLevel,
+  type OtelPluginOptions,
+} from "./config.ts"
 import { probeEndpoint } from "./probe.ts"
 import { setupOtel, createInstruments, forceFlushOtel } from "./otel.ts"
 import { remoteParentContext } from "./trace-context.ts"
-import { handleSessionCreated, handleSessionIdle, handleSessionError, handleSessionStatus, handleRunStarted } from "./handlers/session.ts"
-import { handleMessageUpdated, handleMessagePartUpdated, startMessageSpan } from "./handlers/message.ts"
+import {
+  handleSessionCreated,
+  handleSessionIdle,
+  handleSessionError,
+  handleSessionStatus,
+  handleRunStarted,
+} from "./handlers/session.ts"
+import {
+  handleMessageUpdated,
+  handleMessagePartUpdated,
+  startMessageSpan,
+} from "./handlers/message.ts"
 import { handlePermissionUpdated, handlePermissionReplied } from "./handlers/permission.ts"
 import { handleSessionDiff, handleCommandExecuted } from "./handlers/activity.ts"
 import { handleChatHeaders } from "./handlers/chat-headers.ts"
-import { agentAttrs, getSessionAgentMeta, setBoundedMap } from "./util.ts"
+import {
+  agentAttrs,
+  getSessionAgentMeta,
+  setBoundedMap,
+  isMetricEnabled,
+  setSessionModel,
+} from "./util.ts"
 import type { SessionTotals } from "./types.ts"
 
 const PLUGIN_VERSION: string = (pkg as { version?: string }).version ?? "unknown"
@@ -99,12 +121,15 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
   const tracer = trace.getTracer("com.opencode")
   const remoteContext = remoteParentContext(config.traceparent, config.tracestate)
   if (config.traceparent && !remoteContext) {
-    await log("warn", "invalid OPENCODE_TRACEPARENT ignored", { traceparentLength: config.traceparent.length })
+    await log("warn", "invalid OPENCODE_TRACEPARENT ignored", {
+      traceparentLength: config.traceparent.length,
+    })
   }
   const rootContext = remoteContext ? () => remoteContext : () => ROOT_CONTEXT
   const pendingToolSpans = new Map()
   const pendingPermissions = new Map()
   const sessionTotals = new Map()
+  const sessionStates = new Map()
   const sessionDiffTotals = new Map()
   const runSpans = new Map()
   const runSpanContexts = new Map()
@@ -150,6 +175,7 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
     pendingToolSpans,
     pendingPermissions,
     sessionTotals,
+    sessionStates,
     sessionDiffTotals,
     disabledMetrics,
     disabledTraces,
@@ -170,6 +196,23 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
     tracePropagationProviders: config.tracePropagationProviders,
   }
 
+  if (isMetricEnabled("session.state", ctx)) {
+    instruments.sessionStateGauge.addCallback((result) => {
+      for (const [sessionID, session] of sessionStates) {
+        result.observe(1, {
+          ...commonAttrs,
+          "session.id": sessionID,
+          state: session.state,
+          agent: session.agent,
+          "agent.name": session.agent,
+          "agent.type": session.agentType,
+          is_subagent: session.isSubagent,
+          model: session.model,
+        })
+      }
+    })
+  }
+
   let shuttingDown = false
 
   async function flushTelemetry(reason: string) {
@@ -182,17 +225,32 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
     if (shuttingDown) return
     shuttingDown = true
     await forceFlushOtel(providers)
-    await Promise.allSettled([meterProvider.shutdown(), loggerProvider.shutdown(), tracerProvider.shutdown()])
+    await Promise.allSettled([
+      meterProvider.shutdown(),
+      loggerProvider.shutdown(),
+      tracerProvider.shutdown(),
+    ])
   }
 
-  process.on("SIGTERM", () => { shutdown().then(() => process.exit(0)).catch(() => process.exit(1)) })
-  process.on("SIGINT",  () => { shutdown().then(() => process.exit(0)).catch(() => process.exit(1)) })
-  process.on("beforeExit", () => { shutdown().catch(() => {}) })
+  process.on("SIGTERM", () => {
+    shutdown()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1))
+  })
+  process.on("SIGINT", () => {
+    shutdown()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1))
+  })
+  process.on("beforeExit", () => {
+    shutdown().catch(() => {})
+  })
 
-  const safe = <T extends unknown[]>(
-    name: string,
-    fn: (...args: T) => Promise<void> | void,
-  ): ((...args: T) => Promise<void>) =>
+  const safe =
+    <T extends unknown[]>(
+      name: string,
+      fn: (...args: T) => Promise<void> | void,
+    ): ((...args: T) => Promise<void>) =>
     async (...args: T) => {
       try {
         await fn(...args)
@@ -223,6 +281,11 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
 
     "chat.message": safe("chat.message", async (input, output) => {
       const agent = input.agent ?? "unknown"
+      setSessionModel(
+        input.sessionID,
+        input.model ? `${input.model.providerID}/${input.model.modelID}` : "unknown",
+        ctx,
+      )
       const startTime = Date.now()
       const existingTotals = sessionTotals.get(input.sessionID)
       const nextTotals: SessionTotals = {
@@ -237,20 +300,23 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
       const { agentType } = getSessionAgentMeta(input.sessionID, ctx)
       const sessionSpan = sessionSpans.get(input.sessionID)
       if (sessionSpan) sessionSpan.setAttributes({ [AGENT_NAME]: agent, "agent.type": agentType })
-      const promptText = output.parts.map((part) => {
-        switch (part.type) {
-          case "text":
-            return part.text
-          case "file":
-            return part.filename ?? part.url
-          case "agent":
-            return part.name
-          case "subtask":
-            return part.description
-          default:
-            return ""
-        }
-      }).filter(Boolean).join("\n")
+      const promptText = output.parts
+        .map((part) => {
+          switch (part.type) {
+            case "text":
+              return part.text
+            case "file":
+              return part.filename ?? part.url
+            case "agent":
+              return part.name
+            case "subtask":
+              return part.description
+            default:
+              return ""
+          }
+        })
+        .filter(Boolean)
+        .join("\n")
       if (!sessionSpan) {
         const model = input.model ? `${input.model.providerID}/${input.model.modelID}` : "unknown"
         if (input.messageID) {
@@ -285,9 +351,7 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
           ...agentAttrs(agent, agentType),
           prompt_length: promptLength,
           ...(config.capturePromptInLogs ? { prompt: promptText } : {}),
-          model: input.model
-            ? `${input.model.providerID}/${input.model.modelID}`
-            : "unknown",
+          model: input.model ? `${input.model.providerID}/${input.model.modelID}` : "unknown",
           ...commonAttrs,
         },
       })
@@ -324,9 +388,18 @@ export const OtelPlugin: Plugin = async ({ project, client, directory, worktree 
         case "message.updated": {
           const msgEvt = event as EventMessageUpdated
           const info = msgEvt.properties.info
+          if (info.role === "assistant")
+            setSessionModel(
+              info.sessionID,
+              `${info.providerID ?? "unknown"}/${info.modelID ?? "unknown"}`,
+              ctx,
+            )
           if (info.role === "user") {
             const pendingRun = pendingRuns.get(info.sessionID)
-            if (!sessionSpans.has(info.sessionID) && (pendingRun || activeRuns.get(info.sessionID) !== info.id)) {
+            if (
+              !sessionSpans.has(info.sessionID) &&
+              (pendingRun || activeRuns.get(info.sessionID) !== info.id)
+            ) {
               handleRunStarted(
                 info.id,
                 info.sessionID,

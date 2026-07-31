@@ -1,6 +1,11 @@
 import { SeverityNumber } from "@opentelemetry/api-logs"
 import { SpanStatusCode } from "@opentelemetry/api"
-import type { EventSessionCreated, EventSessionIdle, EventSessionError, EventSessionStatus } from "@opencode-ai/sdk"
+import type {
+  EventSessionCreated,
+  EventSessionIdle,
+  EventSessionError,
+  EventSessionStatus,
+} from "@opencode-ai/sdk"
 import {
   AGENT_NAME,
   INPUT_MIME_TYPE,
@@ -19,6 +24,7 @@ import {
   isMetricEnabled,
   isTraceEnabled,
   resolveSessionTraceContext,
+  setSessionState,
 } from "../util.ts"
 import type { HandlerContext, SessionAgentType } from "../types.ts"
 
@@ -88,9 +94,21 @@ export function handleSessionCreated(e: EventSessionCreated, ctx: HandlerContext
   const isSubagent = !!parentID
   const agentType: SessionAgentType = isSubagent ? "subagent" : "primary"
   if (isMetricEnabled("session.count", ctx)) {
-    ctx.instruments.sessionCounter.add(1, { ...ctx.commonAttrs, "session.id": sessionID, is_subagent: isSubagent })
+    ctx.instruments.sessionCounter.add(1, {
+      ...ctx.commonAttrs,
+      "session.id": sessionID,
+      is_subagent: isSubagent,
+    })
   }
-  setBoundedMap(ctx.sessionTotals, sessionID, { startMs: createdAt, tokens: 0, cost: 0, messages: 0, agent: "unknown", agentType })
+  setSessionState(sessionID, "created", ctx, isSubagent)
+  setBoundedMap(ctx.sessionTotals, sessionID, {
+    startMs: createdAt,
+    tokens: 0,
+    cost: 0,
+    messages: 0,
+    agent: "unknown",
+    agentType,
+  })
 
   if (isTraceEnabled("session", ctx) && parentID) {
     const sessionSpan = ctx.tracer.startSpan(
@@ -135,7 +153,10 @@ function sweepSession(sessionID: string, ctx: HandlerContext) {
   }
   for (const [key, span] of ctx.pendingToolSpans) {
     if (span.sessionID === sessionID) {
-      span.span?.setStatus({ code: SpanStatusCode.ERROR, message: "session ended before tool completed" })
+      span.span?.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: "session ended before tool completed",
+      })
       span.span?.end()
       ctx.pendingToolSpans.delete(key)
     }
@@ -144,7 +165,10 @@ function sweepSession(sessionID: string, ctx: HandlerContext) {
   const msgPrefix = `${sessionID}:`
   for (const [key, span] of ctx.messageSpans) {
     if (key.startsWith(msgPrefix)) {
-      span.setStatus({ code: SpanStatusCode.ERROR, message: "session ended before message completed" })
+      span.setStatus({
+        code: SpanStatusCode.ERROR,
+        message: "session ended before message completed",
+      })
       span.end()
       ctx.messageSpans.delete(key)
     }
@@ -162,6 +186,7 @@ export function handleSessionIdle(e: EventSessionIdle, ctx: HandlerContext) {
   const sessionID = e.properties.sessionID
   const totals = ctx.sessionTotals.get(sessionID)
   const { agentName, agentType } = getSessionAgentMeta(sessionID, ctx)
+  setSessionState(sessionID, "idle", ctx)
   ctx.sessionTotals.delete(sessionID)
   ctx.sessionDiffTotals.delete(sessionID)
   sweepSession(sessionID, ctx)
@@ -233,7 +258,14 @@ export function handleSessionIdle(e: EventSessionIdle, ctx: HandlerContext) {
   })
   ctx.log("debug", "otel: session.idle", {
     sessionID,
-    ...(totals ? { duration_ms, total_tokens: totals.tokens, total_cost_usd: totals.cost, total_messages: totals.messages } : {}),
+    ...(totals
+      ? {
+          duration_ms,
+          total_tokens: totals.tokens,
+          total_cost_usd: totals.cost,
+          total_messages: totals.messages,
+        }
+      : {}),
   })
 }
 
@@ -242,7 +274,10 @@ export function handleSessionError(e: EventSessionError, ctx: HandlerContext) {
   const rawID = e.properties.sessionID
   const sessionID = rawID ?? "unknown"
   const error = errorSummary(e.properties.error)
-  const { agentName, agentType } = rawID ? getSessionAgentMeta(rawID, ctx) : { agentName: "unknown", agentType: "unknown" as const }
+  const { agentName, agentType } = rawID
+    ? getSessionAgentMeta(rawID, ctx)
+    : { agentName: "unknown", agentType: "unknown" as const }
+  if (rawID) setSessionState(rawID, "error", ctx)
   const totals = rawID ? ctx.sessionTotals.get(rawID) : undefined
   if (rawID) {
     ctx.sessionTotals.delete(rawID)
@@ -253,7 +288,8 @@ export function handleSessionError(e: EventSessionError, ctx: HandlerContext) {
   if (rawID) {
     const sessionSpan = ctx.sessionSpans.get(rawID)
     if (sessionSpan) {
-      if (totals) sessionSpan.setAttributes({ [AGENT_NAME]: totals.agent, "agent.type": totals.agentType })
+      if (totals)
+        sessionSpan.setAttributes({ [AGENT_NAME]: totals.agent, "agent.type": totals.agentType })
       sessionSpan.setStatus({ code: SpanStatusCode.ERROR, message: error })
       sessionSpan.setAttribute("error", error)
       sessionSpan.end()
@@ -263,7 +299,8 @@ export function handleSessionError(e: EventSessionError, ctx: HandlerContext) {
     if (runID) ctx.activeRuns.delete(rawID)
     const runSpan = runID ? ctx.runSpans.get(runID) : undefined
     if (runSpan) {
-      if (totals) runSpan.setAttributes({ [AGENT_NAME]: totals.agent, "agent.type": totals.agentType })
+      if (totals)
+        runSpan.setAttributes({ [AGENT_NAME]: totals.agent, "agent.type": totals.agentType })
       runSpan.setStatus({ code: SpanStatusCode.ERROR, message: error })
       runSpan.setAttribute("error", error)
       runSpan.end()
@@ -290,8 +327,10 @@ export function handleSessionError(e: EventSessionError, ctx: HandlerContext) {
 
 /** Increments the retry counter when the session enters a retry state. */
 export function handleSessionStatus(e: EventSessionStatus, ctx: HandlerContext) {
-  if (e.properties.status.type !== "retry") return
   const { sessionID, status } = e.properties
+  if (status.type === "busy" || status.type === "idle" || status.type === "retry")
+    setSessionState(sessionID, status.type, ctx)
+  if (status.type !== "retry") return
   const { attempt, message: retryMessage } = status
   if (isMetricEnabled("retry.count", ctx)) {
     ctx.instruments.retryCounter.add(1, { ...ctx.commonAttrs, "session.id": sessionID })
