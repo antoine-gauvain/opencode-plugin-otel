@@ -8,6 +8,7 @@
     "@opencode-ai/plugin": "^1.14.20",
     "@opencode-ai/sdk": "^1.14.20",
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/api-logs": "^0.219.0",
     "@opentelemetry/core": "^2.8.0",
     "@opentelemetry/exporter-logs-otlp-grpc": "^0.213.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.213.0",
@@ -34,17 +35,16 @@
   },
   "exports": {
     ".": {
+      "bun": "./src/index.ts",
       "default": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./src/index.ts"
     },
     "./server": {
+      "bun": "./src/index.ts",
       "default": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./src/index.ts"
     }
   },
-  "files": [
-    "dist/"
-  ],
   "homepage": "https://github.com/DEVtheOPS/opencode-plugin-otel#readme",
   "keywords": [
     "opentelemetry",
@@ -55,8 +55,8 @@
     "observability"
   ],
   "license": "MPL-2.0",
-  "main": "dist/index.js",
-  "module": "dist/index.js",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
   "name": "@devtheops/opencode-plugin-otel",
   "oc-plugin": [
     "server"
